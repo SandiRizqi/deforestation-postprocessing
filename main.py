@@ -287,37 +287,38 @@ def analyze_recovery_pattern(previous_data, temporal_history, current_date_code,
     Returns:
         dict dengan recovery analysis untuk setiap pixel
     """
-    # Dapatkan urutan bulan
     sorted_dates = sorted(temporal_history.keys())
     current_idx = sorted_dates.index(current_date_code)
 
     recovery_status = {}
-
     height, width = previous_data.shape
-
+    
     for i in range(height):
         for j in range(width):
             if previous_data[i, j] == 0:
-                continue  # Skip pixel tanpa deforestasi sebelumnya
+                continue
 
             old_value = previous_data[i, j]
             old_value_str = str(old_value)
+            
+            if len(old_value_str) < 2 or not old_value_str[0].isdigit():
+                continue
+                
             old_conf_digit = int(old_value_str[0])
             original_date_code = old_value_str[1:]
 
-            # Cek berapa bulan terakhir pixel ini "hilang" dari deteksi
             months_without_detection = 0
 
-            # Cek bulan-bulan sebelumnya (backward)
+            # Cek bulan-bulan sebelumnya
             for k in range(1, min(persistence_months + 1, current_idx + 1)):
                 prev_idx = current_idx - k
                 prev_date = sorted_dates[prev_idx]
                 prev_data = temporal_history[prev_date]['data']
 
-                if prev_data[i, j] <= threshold:  # Tidak terdeteksi deforestasi
+                if prev_data[i, j] <= threshold:
                     months_without_detection += 1
                 else:
-                    break  # Stop jika ada deteksi
+                    break
 
             recovery_status[(i, j)] = {
                 'old_conf': old_conf_digit,
@@ -432,21 +433,37 @@ def update_deforestation_data(previous_image, after_image, temporal_history=None
         after_data = src.read(1).astype(np.float32)
 
     # Validasi dan align ukuran raster jika berbeda
-    if previous_data.shape != after_data.shape:
+    target_shape = previous_data.shape
+    
+    if after_data.shape != target_shape:
         print(f"⚠ WARNING: Ukuran raster berbeda!")
         print(f"  Previous: {previous_data.shape}")
         print(f"  After: {after_data.shape}")
-        print(f"  Auto-resizing after_data ke ukuran previous_data...")
+        print(f"  Auto-resizing ke ukuran: {target_shape}...")
         
-        # Resize after_data ke ukuran previous_data menggunakan interpolation
         from scipy.ndimage import zoom
-        target_shape = previous_data.shape
         zoom_factors = (
             target_shape[0] / after_data.shape[0],
             target_shape[1] / after_data.shape[1]
         )
         after_data = zoom(after_data, zoom_factors, order=1)
         print(f"  ✓ Resize selesai: {after_data.shape}")
+    
+    # Resize semua temporal history data ke target_shape
+    if temporal_history is not None:
+        print(f"  Resizing temporal history data ke {target_shape}...")
+        from scipy.ndimage import zoom
+        
+        for date_code in temporal_history.keys():
+            hist_data = temporal_history[date_code]['data']
+            if hist_data.shape != target_shape:
+                zoom_factors = (
+                    target_shape[0] / hist_data.shape[0],
+                    target_shape[1] / hist_data.shape[1]
+                )
+                temporal_history[date_code]['data'] = zoom(hist_data, zoom_factors, order=1)
+        
+        print(f"  ✓ Temporal history resize selesai")
 
     # Binary deforestation dari data terbaru
     after_defo_binary = (after_data > threshold).astype(int)
@@ -516,7 +533,7 @@ def update_deforestation_data(previous_image, after_image, temporal_history=None
         old_value = previous_data[i, j]
         old_value_str = str(old_value)
         
-        if len(old_value_str) >= 2:
+        if len(old_value_str) >= 2 and old_value_str[0].isdigit():
             old_conf_digit = int(old_value_str[0])
             original_date_code = old_value_str[1:]
             
