@@ -431,6 +431,15 @@ def update_deforestation_data(previous_image, after_image, temporal_history=None
     with rasterio.open(after_image) as src:
         after_data = src.read(1).astype(np.float32)
 
+    # Validasi ukuran raster
+    if previous_data.shape != after_data.shape:
+        raise ValueError(
+            f"Ukuran raster tidak sama!\n"
+            f"  Previous: {previous_data.shape}\n"
+            f"  After: {after_data.shape}\n"
+            f"Pastikan kedua raster memiliki dimensi yang sama."
+        )
+
     # Binary deforestation dari data terbaru
     after_defo_binary = (after_data > threshold).astype(int)
 
@@ -463,6 +472,14 @@ def update_deforestation_data(previous_image, after_image, temporal_history=None
 
     height, width = updated.shape
 
+    # Validasi ulang ukuran
+    if after_defo_binary.shape != (height, width):
+        raise ValueError(
+            f"Mismatch ukuran setelah processing!\n"
+            f"  Expected: {(height, width)}\n"
+            f"  Got: {after_defo_binary.shape}"
+        )
+
     # Tracking statistik
     new_defo_count = 0
     existing_defo_count = 0
@@ -472,8 +489,15 @@ def update_deforestation_data(previous_image, after_image, temporal_history=None
 
     for i in range(height):
         for j in range(width):
-            current_has_defo = after_defo_binary[i, j] > 0
-            previous_has_defo = previous_data[i, j] > 0
+            try:
+                current_has_defo = after_defo_binary[i, j] > 0
+                previous_has_defo = previous_data[i, j] > 0
+            except IndexError as e:
+                print(f"ERROR at position [{i}, {j}]")
+                print(f"  after_defo_binary shape: {after_defo_binary.shape}")
+                print(f"  previous_data shape: {previous_data.shape}")
+                print(f"  updated shape: {updated.shape}")
+                raise
 
             if current_has_defo and not previous_has_defo:
                 # KASUS 1: Pixel baru terdeteksi deforestasi
