@@ -3,9 +3,11 @@ import numpy as np
 import re
 import argparse
 from pathlib import Path
+from datetime import datetime
+from collections import defaultdict
 from scipy.ndimage import binary_opening, binary_closing, label, binary_dilation
 from scipy import ndimage
-
+import pandas as pd
 
 def extract_date_from_filename(filename):
     """
@@ -82,11 +84,11 @@ def enforce_spatial_coherence(deforestation_binary, confidence_map,
     filtered_confidence = confidence_map.copy()
 
     # Untuk setiap cluster, check apakah memenuhi minimum size
-    for label_id in unique_labels:
+    for idx, label_id in enumerate(unique_labels):
         if label_id == 0:  # Background
             continue
 
-        cluster_size = counts[label_id]
+        cluster_size = counts[idx]
         cluster_mask = (labeled_array == label_id)
 
         # Dapatkan confidence level dari cluster ini
@@ -718,9 +720,9 @@ Examples:
     
     parser.add_argument(
         '--threshold', '-t',
-        default=0.9,
+        default=0.7,
         type=float,
-        help='Threshold untuk deteksi deforestasi (default: 0.9)'
+        help='Threshold untuk deteksi deforestasi (default: 0.7)'
     )
     
     parser.add_argument(
@@ -774,6 +776,7 @@ if __name__ == "__main__":
         # Parse arguments
         args = parse_arguments()
         
+        # Validasi paths
         print("=" * 100)
         print("VALIDATION")
         print("=" * 100)
