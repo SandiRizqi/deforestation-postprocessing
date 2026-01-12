@@ -431,14 +431,22 @@ def update_deforestation_data(previous_image, after_image, temporal_history=None
     with rasterio.open(after_image) as src:
         after_data = src.read(1).astype(np.float32)
 
-    # Validasi ukuran raster
+    # Validasi dan align ukuran raster jika berbeda
     if previous_data.shape != after_data.shape:
-        raise ValueError(
-            f"Ukuran raster tidak sama!\n"
-            f"  Previous: {previous_data.shape}\n"
-            f"  After: {after_data.shape}\n"
-            f"Pastikan kedua raster memiliki dimensi yang sama."
+        print(f"⚠ WARNING: Ukuran raster berbeda!")
+        print(f"  Previous: {previous_data.shape}")
+        print(f"  After: {after_data.shape}")
+        print(f"  Auto-resizing after_data ke ukuran previous_data...")
+        
+        # Resize after_data ke ukuran previous_data menggunakan interpolation
+        from scipy.ndimage import zoom
+        target_shape = previous_data.shape
+        zoom_factors = (
+            target_shape[0] / after_data.shape[0],
+            target_shape[1] / after_data.shape[1]
         )
+        after_data = zoom(after_data, zoom_factors, order=1)
+        print(f"  ✓ Resize selesai: {after_data.shape}")
 
     # Binary deforestation dari data terbaru
     after_defo_binary = (after_data > threshold).astype(int)
