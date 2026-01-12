@@ -774,7 +774,6 @@ if __name__ == "__main__":
         # Parse arguments
         args = parse_arguments()
         
-        # Validasi paths
         print("=" * 100)
         print("VALIDATION")
         print("=" * 100)
