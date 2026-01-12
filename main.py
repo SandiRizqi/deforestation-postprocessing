@@ -480,13 +480,15 @@ def update_deforestation_data(previous_image, after_image, temporal_history=None
 
     height, width = updated.shape
 
-    # Validasi ulang ukuran
-    if after_defo_binary.shape != (height, width):
-        raise ValueError(
-            f"Mismatch ukuran setelah processing!\n"
-            f"  Expected: {(height, width)}\n"
-            f"  Got: {after_defo_binary.shape}"
-        )
+    # Ensure all arrays have same shape
+    after_defo_binary = after_defo_binary.astype(bool)
+    previous_binary = (previous_data > 0).astype(bool)
+
+    # Validasi ukuran
+    assert after_defo_binary.shape == updated.shape, \
+        f"Shape mismatch: after_defo_binary {after_defo_binary.shape} vs updated {updated.shape}"
+    assert previous_binary.shape == updated.shape, \
+        f"Shape mismatch: previous_binary {previous_binary.shape} vs updated {updated.shape}"
 
     # Tracking statistik
     new_defo_count = 0
@@ -495,67 +497,65 @@ def update_deforestation_data(previous_image, after_image, temporal_history=None
     confidence_decreased = 0
     defo_reset_to_forest = 0
 
-    for i in range(height):
-        for j in range(width):
-            try:
-                current_has_defo = after_defo_binary[i, j] > 0
-                previous_has_defo = previous_data[i, j] > 0
-            except IndexError as e:
-                print(f"ERROR at position [{i}, {j}]")
-                print(f"  after_defo_binary shape: {after_defo_binary.shape}")
-                print(f"  previous_data shape: {previous_data.shape}")
-                print(f"  updated shape: {updated.shape}")
-                raise
+    # KASUS 1: Pixel baru terdeteksi deforestasi (current=1, previous=0)
+    case1_mask = after_defo_binary & ~previous_binary
+    if temporal_history is not None:
+        updated[case1_mask] = conf_score_current[case1_mask]
+    else:
+        updated[case1_mask] = (1 * 1000000 + int(current_date_code))
+    new_defo_count = case1_mask.sum()
 
-            if current_has_defo and not previous_has_defo:
-                # KASUS 1: Pixel baru terdeteksi deforestasi
-                updated[i, j] = conf_score_current[i, j]
-                new_defo_count += 1
+    # KASUS 2: Pixel sudah deforestasi sebelumnya dan tetap deforestasi (current=1, previous=1)
+    case2_mask = after_defo_binary & previous_binary
+    case2_indices = np.where(case2_mask)
+    
+    for idx in range(len(case2_indices[0])):
+        i = case2_indices[0][idx]
+        j = case2_indices[1][idx]
+        
+        old_value = previous_data[i, j]
+        old_value_str = str(old_value)
+        
+        if len(old_value_str) >= 2:
+            old_conf_digit = int(old_value_str[0])
+            original_date_code = old_value_str[1:]
+            
+            # Increment confidence digit (1→2→3→4), maksimal 4
+            new_conf_digit = min(old_conf_digit + 1, 4)
+            new_value = int(f"{new_conf_digit}{original_date_code}")
+            updated[i, j] = new_value
+            confidence_increased += 1
+    
+    existing_defo_count = case2_mask.sum()
 
-            elif current_has_defo and previous_has_defo:
-                # KASUS 2: Pixel sudah deforestasi sebelumnya dan tetap deforestasi
-                old_value = previous_data[i, j]
-                old_value_str = str(old_value)
-
-                # Extract confidence digit dan date code lama
-                old_conf_digit = int(old_value_str[0])
-                original_date_code = old_value_str[1:]
-
-                # Increment confidence digit (1→2→3→4), maksimal 4
-                new_conf_digit = min(old_conf_digit + 1, 4)
-
-                # Buat nilai baru
-                new_value = int(f"{new_conf_digit}{original_date_code}")
+    # KASUS 3: Pixel yang sebelumnya deforestasi tapi sekarang tidak (current=0, previous=1)
+    case3_mask = ~after_defo_binary & previous_binary
+    case3_indices = np.where(case3_mask)
+    
+    for idx in range(len(case3_indices[0])):
+        i = case3_indices[0][idx]
+        j = case3_indices[1][idx]
+        
+        recovery_info = recovery_analysis.get((i, j))
+        
+        if recovery_info is None:
+            updated[i, j] = 0
+            defo_reset_to_forest += 1
+        elif recovery_info['should_reset']:
+            updated[i, j] = 0
+            defo_reset_to_forest += 1
+        elif recovery_info['should_decrement']:
+            old_conf = recovery_info['old_conf']
+            original_date = recovery_info['original_date']
+            new_conf_digit = max(old_conf - 1, 0)
+            
+            if new_conf_digit == 0:
+                updated[i, j] = 0
+                defo_reset_to_forest += 1
+            else:
+                new_value = int(f"{new_conf_digit}{original_date}")
                 updated[i, j] = new_value
-                existing_defo_count += 1
-                confidence_increased += 1
-
-            elif not current_has_defo and previous_has_defo:
-                # KASUS 3: Pixel yang sebelumnya deforestasi tapi sekarang tidak
-                recovery_info = recovery_analysis.get((i, j))
-
-                if recovery_info is None:
-                    updated[i, j] = 0
-                    defo_reset_to_forest += 1
-
-                elif recovery_info['should_reset']:
-                    updated[i, j] = 0
-                    defo_reset_to_forest += 1
-
-                elif recovery_info['should_decrement']:
-                    old_conf = recovery_info['old_conf']
-                    original_date = recovery_info['original_date']
-
-                    new_conf_digit = max(old_conf - 1, 0)
-
-                    if new_conf_digit == 0:
-                        updated[i, j] = 0
-                        defo_reset_to_forest += 1
-                    else:
-                        new_value = int(f"{new_conf_digit}{original_date}")
-                        updated[i, j] = new_value
-
-                    confidence_decreased += 1
+            confidence_decreased += 1
 
     # Apply morphological filtering untuk remove noise
     updated_binary = (updated > 0).astype(int)
@@ -575,17 +575,31 @@ def update_deforestation_data(previous_image, after_image, temporal_history=None
         neighborhood_size=5
     )
 
-    # Reconstruct final raster dengan confidence + date code
+    # Reconstruct final raster dengan confidence + date code menggunakan vectorized ops
     final_raster = np.zeros_like(updated)
-    for i in range(height):
-        for j in range(width):
-            if final_confidence[i, j] > 0:
-                old_value_str = str(updated[i, j])
-                if len(old_value_str) > 1:
-                    original_date = old_value_str[1:]
-                    final_raster[i, j] = int(f"{final_confidence[i, j]}{original_date}")
-                else:
-                    final_raster[i, j] = int(f"{final_confidence[i, j]}{current_date_code}")
+    
+    # Extract original date codes dari updated raster
+    # Format: [C][YYYYMM] dimana C adalah confidence level
+    for conf_level in range(1, 5):
+        conf_mask = (final_confidence == conf_level)
+        
+        if conf_mask.sum() == 0:
+            continue
+        
+        # Get indices where confidence level is conf_level
+        conf_indices = np.where(conf_mask)
+        
+        for idx in range(len(conf_indices[0])):
+            i = conf_indices[0][idx]
+            j = conf_indices[1][idx]
+            
+            old_value_str = str(updated[i, j])
+            if len(old_value_str) > 1 and old_value_str[0].isdigit():
+                # Extract date code (semua karakter kecuali yang pertama)
+                original_date = old_value_str[1:]
+                final_raster[i, j] = int(f"{conf_level}{original_date}")
+            else:
+                final_raster[i, j] = int(f"{conf_level}{current_date_code}")
 
     updated = final_raster.astype(np.int32)
 
